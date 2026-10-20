@@ -1,0 +1,8 @@
+service:
+  full_name: Amazon Redshift
+  short_name: Redshift
+  link: https://aws.amazon.com/redshift/
+  documentation: https://docs.aws.amazon.com/redshift/
+api_versions:
+  - api_version: v1alpha1
+    status: available
