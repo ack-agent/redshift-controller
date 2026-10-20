@@ -1,0 +1,20 @@
+ignore:
+  resource_names:
+      - AuthenticationProfile
+      - Cluster
+      - ClusterParameterGroup
+      - ClusterSecurityGroup
+      - ClusterSnapshot
+      - ClusterSubnetGroup
+      - CustomDomainAssociation
+      - EndpointAccess
+      - EventSubscription
+      - HsmClientCertificate
+      - HsmConfiguration
+      - Integration
+      - Qev2IdcApplication
+      - RedshiftIdcApplication
+      - ScheduledAction
+      - SnapshotCopyGrant
+      - SnapshotSchedule
+      - UsageLimit

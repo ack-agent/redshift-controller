@@ -1,0 +1,52 @@
+---
+annotations:
+  capabilityLevel: Basic Install
+  shortDescription: AWS Redshift controller is a service controller for managing Redshift
+    resources in Kubernetes
+displayName: AWS Controllers for Kubernetes - Amazon Redshift
+description: |-
+  Manage Amazon Redshift resources in AWS from within your Kubernetes cluster.
+
+
+  **About Amazon Redshift**
+
+
+  Amazon Redshift is a fully managed, petabyte-scale cloud data warehouse service.
+  It uses SQL to analyze structured and semi-structured data across data
+  warehouses, operational databases, and data lakes, using AWS-designed hardware
+  and machine learning to deliver the best price performance at any scale.
+
+
+  With Amazon Redshift you can provision and manage clusters, snapshots, parameter
+  groups, subnet groups, and usage limits without having to set up, operate, or
+  scale the underlying data warehouse infrastructure.
+
+
+  **About the AWS Controllers for Kubernetes**
+
+
+  This controller is a component of the [AWS Controller for Kubernetes](https://github.com/aws/aws-controllers-k8s)
+  project.
+
+
+  **Pre-Installation Steps**
+
+
+  Please follow the following link: [Red Hat OpenShift](https://aws-controllers-k8s.github.io/community/docs/user-docs/openshift/)
+samples:
+- kind: Cluster
+  spec: '{}'
+- kind: ClusterSnapshot
+  spec: '{}'
+- kind: ClusterParameterGroup
+  spec: '{}'
+- kind: ClusterSubnetGroup
+  spec: '{}'
+- kind: UsageLimit
+  spec: '{}'
+maintainers:
+- name: "redshift maintainer team"
+  email: "ack-maintainers@amazon.com"
+links:
+- name: Amazon Redshift Developer Resources
+  url: https://aws.amazon.com/redshift/developer-resources/
