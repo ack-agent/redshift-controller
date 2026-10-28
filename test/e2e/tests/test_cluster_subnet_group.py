@@ -17,6 +17,7 @@ import time
 import pytest
 import logging
 
+from acktest.k8s import condition
 from acktest.k8s import resource as k8s
 from acktest.resources import random_suffix_name
 from e2e import service_marker, CRD_GROUP, CRD_VERSION, load_redshift_resource
@@ -24,9 +25,12 @@ from e2e.replacement_values import REPLACEMENT_VALUES
 
 RESOURCE_PLURAL = "clustersubnetgroups"
 
-CREATE_WAIT_AFTER_SECONDS = 10
-UPDATE_WAIT_AFTER_SECONDS = 10
 DELETE_WAIT_AFTER_SECONDS = 10
+
+# Creating a resource with tags requires a secondary sync, which the
+# controller requeues after 30 seconds.
+SYNC_WAIT_PERIODS = 12
+SYNC_PERIOD_LENGTH = 5
 
 
 @pytest.fixture(scope="module")
@@ -49,6 +53,37 @@ def get_subnet_ids(ec2_client):
     subnets = resp.get("Subnets", [])
     assert len(subnets) > 1, "At least two default subnets are needed for testing"
     return subnets[0]["SubnetId"], subnets[1]["SubnetId"]
+
+
+def patch_and_wait_for_sync(ref, updates):
+    """Patch the resource and wait for a reconcile that happened after the patch.
+
+    ACK.ResourceSynced is usually still True from the previous reconcile right
+    after a patch, so only accept a condition with a newer lastTransitionTime.
+    """
+    last_synced = condition.get_synced_last_transition_time(ref)
+    k8s.patch_custom_resource(ref, updates)
+    assert k8s.wait_on_condition_after(
+        ref,
+        condition.CONDITION_TYPE_RESOURCE_SYNCED,
+        "True",
+        last_transition_after=last_synced,
+        wait_periods=SYNC_WAIT_PERIODS,
+        period_length=SYNC_PERIOD_LENGTH,
+    )
+
+
+def describe_subnet_group(redshift_client, name):
+    resp = redshift_client.describe_cluster_subnet_groups(
+        ClusterSubnetGroupName=name,
+    )
+    groups = resp["ClusterSubnetGroups"]
+    assert len(groups) == 1
+    return groups[0]
+
+
+def aws_tags(group):
+    return {t["Key"]: t["Value"] for t in group.get("Tags", [])}
 
 
 @service_marker
@@ -81,29 +116,19 @@ class TestClusterSubnetGroup:
         assert cr is not None
         assert k8s.get_resource_exists(ref)
 
-        time.sleep(CREATE_WAIT_AFTER_SECONDS)
-
-        # Wait for the resource to be synced
-        cr = k8s.get_resource(ref)
-        condition_synced = k8s.get_resource_condition(ref, "ACK.ResourceSynced")
-        # The custom_sync pattern may cause an initial unsynced state; wait for sync
-        for _ in range(6):
-            time.sleep(5)
-            condition_synced = k8s.get_resource_condition(ref, "ACK.ResourceSynced")
-            if condition_synced is not None and condition_synced["status"] == "True":
-                break
-        assert condition_synced is not None
-        assert condition_synced["status"] == "True"
+        assert k8s.wait_on_condition(
+            ref,
+            condition.CONDITION_TYPE_RESOURCE_SYNCED,
+            "True",
+            wait_periods=SYNC_WAIT_PERIODS,
+            period_length=SYNC_PERIOD_LENGTH,
+        )
 
         # Verify the resource exists in AWS
         cr = k8s.get_resource(ref)
-        aws_resp = redshift_client.describe_cluster_subnet_groups(
-            ClusterSubnetGroupName=resource_name,
-        )
-        aws_groups = aws_resp["ClusterSubnetGroups"]
-        assert len(aws_groups) == 1
-        assert aws_groups[0]["ClusterSubnetGroupName"] == resource_name
-        assert aws_groups[0]["Description"] == description
+        group = describe_subnet_group(redshift_client, resource_name)
+        assert group["ClusterSubnetGroupName"] == resource_name
+        assert group["Description"] == description
 
         # Verify status fields are populated
         assert cr["status"].get("subnetGroupStatus") is not None
@@ -112,124 +137,52 @@ class TestClusterSubnetGroup:
         assert len(cr["status"]["subnets"]) > 0
 
         # Verify tags in AWS
-        aws_tags = {t["Key"]: t["Value"] for t in aws_groups[0].get("Tags", [])}
-        assert "environment" in aws_tags
-        assert aws_tags["environment"] == "test"
+        assert aws_tags(group).get("environment") == "test"
 
         # --- Update: change description ---
         new_description = "Updated ACK test cluster subnet group"
-        updates = {
-            "spec": {
-                "description": new_description,
-            },
-        }
-        k8s.patch_custom_resource(ref, updates)
-        time.sleep(UPDATE_WAIT_AFTER_SECONDS)
+        patch_and_wait_for_sync(ref, {"spec": {"description": new_description}})
 
-        # Wait for sync after update
-        for _ in range(6):
-            time.sleep(5)
-            condition_synced = k8s.get_resource_condition(ref, "ACK.ResourceSynced")
-            if condition_synced is not None and condition_synced["status"] == "True":
-                break
-        assert condition_synced is not None
-        assert condition_synced["status"] == "True"
-
-        # Verify update in AWS
-        aws_resp = redshift_client.describe_cluster_subnet_groups(
-            ClusterSubnetGroupName=resource_name,
-        )
-        assert aws_resp["ClusterSubnetGroups"][0]["Description"] == new_description
+        group = describe_subnet_group(redshift_client, resource_name)
+        assert group["Description"] == new_description
 
         # --- Update: change tags ---
-        tag_updates = {
+        patch_and_wait_for_sync(ref, {
             "spec": {
                 "tags": [
                     {"key": "environment", "value": "staging"},
                     {"key": "team", "value": "platform"},
                 ],
             },
-        }
-        k8s.patch_custom_resource(ref, tag_updates)
-        time.sleep(UPDATE_WAIT_AFTER_SECONDS)
+        })
 
-        # Wait for sync after tag update
-        for _ in range(6):
-            time.sleep(5)
-            condition_synced = k8s.get_resource_condition(ref, "ACK.ResourceSynced")
-            if condition_synced is not None and condition_synced["status"] == "True":
-                break
-        assert condition_synced is not None
-        assert condition_synced["status"] == "True"
-
-        # Verify tags in AWS
-        aws_resp = redshift_client.describe_cluster_subnet_groups(
-            ClusterSubnetGroupName=resource_name,
-        )
-        aws_tags = {
-            t["Key"]: t["Value"]
-            for t in aws_resp["ClusterSubnetGroups"][0].get("Tags", [])
-        }
-        assert aws_tags.get("environment") == "staging"
-        assert aws_tags.get("team") == "platform"
+        tags = aws_tags(describe_subnet_group(redshift_client, resource_name))
+        assert tags.get("environment") == "staging"
+        assert tags.get("team") == "platform"
 
         # --- Update: remove a tag ---
-        tag_updates = {
+        patch_and_wait_for_sync(ref, {
             "spec": {
                 "tags": [
                     {"key": "team", "value": "platform"},
                 ],
             },
-        }
-        k8s.patch_custom_resource(ref, tag_updates)
-        time.sleep(UPDATE_WAIT_AFTER_SECONDS)
+        })
 
-        # Wait for sync after tag removal
-        for _ in range(6):
-            time.sleep(5)
-            condition_synced = k8s.get_resource_condition(ref, "ACK.ResourceSynced")
-            if condition_synced is not None and condition_synced["status"] == "True":
-                break
-        assert condition_synced is not None
-        assert condition_synced["status"] == "True"
-
-        # Verify tag removal in AWS
-        aws_resp = redshift_client.describe_cluster_subnet_groups(
-            ClusterSubnetGroupName=resource_name,
-        )
-        aws_tags = {
-            t["Key"]: t["Value"]
-            for t in aws_resp["ClusterSubnetGroups"][0].get("Tags", [])
-        }
-        assert "environment" not in aws_tags
-        assert aws_tags.get("team") == "platform"
+        tags = aws_tags(describe_subnet_group(redshift_client, resource_name))
+        assert "environment" not in tags
+        assert tags.get("team") == "platform"
 
         # --- Update: add a subnet ---
-        subnet_updates = {
+        patch_and_wait_for_sync(ref, {
             "spec": {
                 "subnetIDs": [subnet_id, second_subnet_id],
             },
-        }
-        k8s.patch_custom_resource(ref, subnet_updates)
-        time.sleep(UPDATE_WAIT_AFTER_SECONDS)
-
-        # Wait for sync after subnet update
-        for _ in range(6):
-            time.sleep(5)
-            condition_synced = k8s.get_resource_condition(ref, "ACK.ResourceSynced")
-            if condition_synced is not None and condition_synced["status"] == "True":
-                break
-        assert condition_synced is not None
-        assert condition_synced["status"] == "True"
+        })
 
         # Verify subnet update in AWS and in the CR
-        aws_resp = redshift_client.describe_cluster_subnet_groups(
-            ClusterSubnetGroupName=resource_name,
-        )
-        aws_subnet_ids = {
-            s["SubnetIdentifier"]
-            for s in aws_resp["ClusterSubnetGroups"][0]["Subnets"]
-        }
+        group = describe_subnet_group(redshift_client, resource_name)
+        aws_subnet_ids = {s["SubnetIdentifier"] for s in group["Subnets"]}
         assert aws_subnet_ids == {subnet_id, second_subnet_id}
         cr = k8s.get_resource(ref)
         assert set(cr["spec"]["subnetIDs"]) == {subnet_id, second_subnet_id}
