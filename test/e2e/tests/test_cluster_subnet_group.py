@@ -41,21 +41,21 @@ def ec2_client():
     return boto3.client("ec2")
 
 
-def get_subnet_id(ec2_client):
-    """Get a subnet ID from the default VPC for testing."""
+def get_subnet_ids(ec2_client):
+    """Get two subnet IDs from the default VPC for testing."""
     resp = ec2_client.describe_subnets(
         Filters=[{"Name": "default-for-az", "Values": ["true"]}],
     )
     subnets = resp.get("Subnets", [])
-    assert len(subnets) > 0, "No default subnets found for testing"
-    return subnets[0]["SubnetId"]
+    assert len(subnets) > 1, "At least two default subnets are needed for testing"
+    return subnets[0]["SubnetId"], subnets[1]["SubnetId"]
 
 
 @service_marker
 @pytest.mark.canary
 class TestClusterSubnetGroup:
     def test_create_update_delete(self, redshift_client, ec2_client):
-        subnet_id = get_subnet_id(ec2_client)
+        subnet_id, second_subnet_id = get_subnet_ids(ec2_client)
         resource_name = random_suffix_name("ack-test-csg", 24)
         description = "ACK test cluster subnet group"
 
@@ -172,6 +172,67 @@ class TestClusterSubnetGroup:
         }
         assert aws_tags.get("environment") == "staging"
         assert aws_tags.get("team") == "platform"
+
+        # --- Update: remove a tag ---
+        tag_updates = {
+            "spec": {
+                "tags": [
+                    {"key": "team", "value": "platform"},
+                ],
+            },
+        }
+        k8s.patch_custom_resource(ref, tag_updates)
+        time.sleep(UPDATE_WAIT_AFTER_SECONDS)
+
+        # Wait for sync after tag removal
+        for _ in range(6):
+            time.sleep(5)
+            condition_synced = k8s.get_resource_condition(ref, "ACK.ResourceSynced")
+            if condition_synced is not None and condition_synced["status"] == "True":
+                break
+        assert condition_synced is not None
+        assert condition_synced["status"] == "True"
+
+        # Verify tag removal in AWS
+        aws_resp = redshift_client.describe_cluster_subnet_groups(
+            ClusterSubnetGroupName=resource_name,
+        )
+        aws_tags = {
+            t["Key"]: t["Value"]
+            for t in aws_resp["ClusterSubnetGroups"][0].get("Tags", [])
+        }
+        assert "environment" not in aws_tags
+        assert aws_tags.get("team") == "platform"
+
+        # --- Update: add a subnet ---
+        subnet_updates = {
+            "spec": {
+                "subnetIDs": [subnet_id, second_subnet_id],
+            },
+        }
+        k8s.patch_custom_resource(ref, subnet_updates)
+        time.sleep(UPDATE_WAIT_AFTER_SECONDS)
+
+        # Wait for sync after subnet update
+        for _ in range(6):
+            time.sleep(5)
+            condition_synced = k8s.get_resource_condition(ref, "ACK.ResourceSynced")
+            if condition_synced is not None and condition_synced["status"] == "True":
+                break
+        assert condition_synced is not None
+        assert condition_synced["status"] == "True"
+
+        # Verify subnet update in AWS and in the CR
+        aws_resp = redshift_client.describe_cluster_subnet_groups(
+            ClusterSubnetGroupName=resource_name,
+        )
+        aws_subnet_ids = {
+            s["SubnetIdentifier"]
+            for s in aws_resp["ClusterSubnetGroups"][0]["Subnets"]
+        }
+        assert aws_subnet_ids == {subnet_id, second_subnet_id}
+        cr = k8s.get_resource(ref)
+        assert set(cr["spec"]["subnetIDs"]) == {subnet_id, second_subnet_id}
 
         # --- Delete ---
         k8s.delete_custom_resource(ref)

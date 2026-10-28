@@ -174,6 +174,14 @@ func (rm *resourceManager) sdkFind(
 	}
 
 	rm.setStatusDefaults(ko)
+	subnets := make([]*string, 0, len(ko.Status.Subnets))
+	for _, subnetIdIter := range ko.Status.Subnets {
+		if subnetIdIter.SubnetIdentifier != nil {
+			subnets = append(subnets, subnetIdIter.SubnetIdentifier)
+		}
+	}
+	ko.Spec.SubnetIDs = subnets
+
 	return &resource{ko}, nil
 }
 
@@ -651,9 +659,7 @@ func (rm *resourceManager) terminalAWSError(err error) bool {
 		return false
 	}
 	switch terminalErr.ErrorCode() {
-	case "ClusterSubnetGroupQuotaExceeded",
-		"ClusterSubnetQuotaExceededFault",
-		"InvalidSubnet",
+	case "InvalidSubnet",
 		"ClusterSubnetGroupAlreadyExists":
 		return true
 	default:

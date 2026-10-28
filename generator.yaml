@@ -44,7 +44,8 @@ resources:
         404:
           code: ClusterSubnetGroupNotFoundFault
       terminal_codes:
-        - ClusterSubnetGroupQuotaExceeded
-        - ClusterSubnetQuotaExceededFault
         - InvalidSubnet
         - ClusterSubnetGroupAlreadyExists
+    hooks:
+      sdk_read_many_post_set_output:
+        template_path: hooks/cluster_subnet_group/sdk_read_many_post_set_output.go.tpl
