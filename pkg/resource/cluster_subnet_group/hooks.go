@@ -16,11 +16,29 @@ package cluster_subnet_group
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	ackerr "github.com/aws-controllers-k8s/runtime/pkg/errors"
 	ackrtlog "github.com/aws-controllers-k8s/runtime/pkg/runtime/log"
 	svcsdk "github.com/aws/aws-sdk-go-v2/service/redshift"
 	svcsdktypes "github.com/aws/aws-sdk-go-v2/service/redshift/types"
 )
+
+// hasUpperCase reports whether name contains upper-case letters.
+func hasUpperCase(name *string) bool {
+	return name != nil && strings.ToLower(*name) != *name
+}
+
+// validateSubnetGroupName rejects an upper-case name before create: Redshift
+// stores subnet group names in lower case, so such a CR would never sync.
+func validateSubnetGroupName(name *string) error {
+	if !hasUpperCase(name) {
+		return nil
+	}
+	return ackerr.NewTerminalError(fmt.Errorf(
+		"spec.name %q contains upper-case letters; Redshift stores subnet group names in lower case, so the resource would never sync. spec.name is immutable; delete and recreate the resource with %q",
+		*name, strings.ToLower(*name)))
+}
 
 // syncTags reconciles the Tags field for a ClusterSubnetGroup resource
 // by computing the diff between desired and latest tags, then calling

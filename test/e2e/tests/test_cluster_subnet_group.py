@@ -13,6 +13,7 @@
 
 """Integration tests for the Redshift ClusterSubnetGroup resource."""
 
+import copy
 import time
 import pytest
 import logging
@@ -186,6 +187,45 @@ class TestClusterSubnetGroup:
         assert aws_subnet_ids == {subnet_id, second_subnet_id}
         cr = k8s.get_resource(ref)
         assert set(cr["spec"]["subnetIDs"]) == {subnet_id, second_subnet_id}
+
+        # --- Upper-case spec.name: terminal, and the lower-case group is
+        # untouched. Redshift stores names in lower case, so without the
+        # guard this CR could bind to resource_name's group.
+        uc_name = f"{resource_name}-uc"
+        uc_data = copy.deepcopy(resource_data)
+        uc_data["metadata"]["name"] = uc_name
+        uc_data["spec"]["name"] = resource_name.upper()
+        uc_data["spec"]["description"] = "must not be applied"
+        uc_data["spec"]["subnetIDs"] = [subnet_id]
+        uc_ref = k8s.CustomResourceReference(
+            CRD_GROUP, CRD_VERSION, RESOURCE_PLURAL,
+            uc_name, namespace="default",
+        )
+        k8s.create_custom_resource(uc_ref, uc_data)
+        try:
+            k8s.wait_resource_consumed_by_controller(uc_ref)
+            assert k8s.wait_on_condition(
+                uc_ref, "ACK.Terminal", "True",
+                wait_periods=SYNC_WAIT_PERIODS, period_length=SYNC_PERIOD_LENGTH,
+            )
+            terminal = k8s.get_resource_condition(uc_ref, "ACK.Terminal")
+            assert "upper-case" in terminal.get("message", "")
+
+            # Deleting the upper-case CR must not delete the real group.
+            _, deleted = k8s.delete_custom_resource(
+                uc_ref, wait_periods=SYNC_WAIT_PERIODS, period_length=SYNC_PERIOD_LENGTH,
+            )
+            assert deleted
+            assert not k8s.get_resource_exists(uc_ref)
+
+            group = describe_subnet_group(redshift_client, resource_name)
+            assert group["Description"] == new_description
+            assert {s["SubnetIdentifier"] for s in group["Subnets"]} == {
+                subnet_id, second_subnet_id,
+            }
+        finally:
+            if k8s.get_resource_exists(uc_ref):
+                k8s.delete_custom_resource(uc_ref)
 
         # --- Delete ---
         k8s.delete_custom_resource(ref)
