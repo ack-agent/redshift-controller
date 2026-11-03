@@ -46,8 +46,8 @@ type ClusterSubnetGroupSpec struct {
 	Name *string `json:"name"`
 	// An array of VPC subnet IDs. A maximum of 20 subnets can be modified in a
 	// single request.
-	// +kubebuilder:validation:Required
-	SubnetIDs []*string `json:"subnetIDs"`
+	SubnetIDs  []*string                                  `json:"subnetIDs,omitempty"`
+	SubnetRefs []*ackv1alpha1.AWSResourceReferenceWrapper `json:"subnetRefs,omitempty"`
 	// A list of tag instances.
 	Tags []*Tag `json:"tags,omitempty"`
 }
@@ -68,7 +68,7 @@ type ClusterSubnetGroupStatus struct {
 	// The status of the cluster subnet group. Possible values are Complete, Incomplete
 	// and Invalid.
 	// +kubebuilder:validation:Optional
-	SubnetGroupStatus *string `json:"subnetGroupStatus,omitempty"`
+	Status *string `json:"status,omitempty"`
 	// A list of the VPC Subnet elements.
 	// +kubebuilder:validation:Optional
 	Subnets []*Subnet `json:"subnets,omitempty"`

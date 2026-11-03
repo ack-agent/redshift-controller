@@ -132,7 +132,7 @@ class TestClusterSubnetGroup:
         assert group["Description"] == description
 
         # Verify status fields are populated
-        assert cr["status"].get("subnetGroupStatus") is not None
+        assert cr["status"].get("status") is not None
         assert cr["status"].get("vpcID") is not None
         assert cr["status"].get("subnets") is not None
         assert len(cr["status"]["subnets"]) > 0

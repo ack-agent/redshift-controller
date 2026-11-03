@@ -109,9 +109,9 @@ func (rm *resourceManager) sdkFind(
 			ko.Spec.Description = nil
 		}
 		if elem.SubnetGroupStatus != nil {
-			ko.Status.SubnetGroupStatus = elem.SubnetGroupStatus
+			ko.Status.Status = elem.SubnetGroupStatus
 		} else {
-			ko.Status.SubnetGroupStatus = nil
+			ko.Status.Status = nil
 		}
 		if elem.Subnets != nil {
 			f3 := []*svcapitypes.Subnet{}
@@ -259,9 +259,9 @@ func (rm *resourceManager) sdkCreate(
 		ko.Spec.Description = nil
 	}
 	if resp.ClusterSubnetGroup.SubnetGroupStatus != nil {
-		ko.Status.SubnetGroupStatus = resp.ClusterSubnetGroup.SubnetGroupStatus
+		ko.Status.Status = resp.ClusterSubnetGroup.SubnetGroupStatus
 	} else {
-		ko.Status.SubnetGroupStatus = nil
+		ko.Status.Status = nil
 	}
 	if resp.ClusterSubnetGroup.Subnets != nil {
 		f3 := []*svcapitypes.Subnet{}
@@ -433,9 +433,9 @@ func (rm *resourceManager) sdkUpdate(
 		ko.Spec.Description = nil
 	}
 	if resp.ClusterSubnetGroup.SubnetGroupStatus != nil {
-		ko.Status.SubnetGroupStatus = resp.ClusterSubnetGroup.SubnetGroupStatus
+		ko.Status.Status = resp.ClusterSubnetGroup.SubnetGroupStatus
 	} else {
-		ko.Status.SubnetGroupStatus = nil
+		ko.Status.Status = nil
 	}
 	if resp.ClusterSubnetGroup.Subnets != nil {
 		f3 := []*svcapitypes.Subnet{}
@@ -670,8 +670,7 @@ func (rm *resourceManager) terminalAWSError(err error) bool {
 		return false
 	}
 	switch terminalErr.ErrorCode() {
-	case "InvalidSubnet",
-		"ClusterSubnetGroupAlreadyExists":
+	case "InvalidSubnet":
 		return true
 	default:
 		return false
