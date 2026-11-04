@@ -23,6 +23,8 @@ resources:
       Name:
         is_primary_key: true
         is_immutable: true
+        set:
+          - ignore: from
       SubnetIDs:
         references:
           service_name: ec2
@@ -57,9 +59,5 @@ resources:
       terminal_codes:
         - InvalidSubnet
     hooks:
-      sdk_create_pre_build_request:
-        template_path: hooks/cluster_subnet_group/sdk_create_pre_build_request.go.tpl
-      sdk_read_many_pre_build_request:
-        template_path: hooks/cluster_subnet_group/sdk_read_many_pre_build_request.go.tpl
       sdk_read_many_post_set_output:
         template_path: hooks/cluster_subnet_group/sdk_read_many_post_set_output.go.tpl

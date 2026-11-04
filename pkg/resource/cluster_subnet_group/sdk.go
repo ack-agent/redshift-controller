@@ -63,13 +63,6 @@ func (rm *resourceManager) sdkFind(
 	defer func() {
 		exit(err)
 	}()
-	// Redshift stores subnet group names in lower case, so an upper-case
-	// spec.name can never own a group; report NotFound rather than risk
-	// binding to the lower-case group of the same name.
-	if hasUpperCase(r.ko.Spec.Name) {
-		return nil, ackerr.NotFound
-	}
-
 	// If any required fields in the input shape are missing, AWS resource is
 	// not created yet. Return NotFound here to indicate to callers that the
 	// resource isn't yet created.
@@ -98,11 +91,6 @@ func (rm *resourceManager) sdkFind(
 
 	found := false
 	for _, elem := range resp.ClusterSubnetGroups {
-		if elem.ClusterSubnetGroupName != nil {
-			ko.Spec.Name = elem.ClusterSubnetGroupName
-		} else {
-			ko.Spec.Name = nil
-		}
 		if elem.Description != nil {
 			ko.Spec.Description = elem.Description
 		} else {
@@ -228,10 +216,6 @@ func (rm *resourceManager) sdkCreate(
 	defer func() {
 		exit(err)
 	}()
-	if err = validateSubnetGroupName(desired.ko.Spec.Name); err != nil {
-		return nil, err
-	}
-
 	input, err := rm.newCreateRequestPayload(ctx, desired)
 	if err != nil {
 		return nil, err
@@ -248,11 +232,6 @@ func (rm *resourceManager) sdkCreate(
 	// the original Kubernetes object we passed to the function
 	ko := desired.ko.DeepCopy()
 
-	if resp.ClusterSubnetGroup.ClusterSubnetGroupName != nil {
-		ko.Spec.Name = resp.ClusterSubnetGroup.ClusterSubnetGroupName
-	} else {
-		ko.Spec.Name = nil
-	}
 	if resp.ClusterSubnetGroup.Description != nil {
 		ko.Spec.Description = resp.ClusterSubnetGroup.Description
 	} else {
@@ -422,11 +401,6 @@ func (rm *resourceManager) sdkUpdate(
 	// the original Kubernetes object we passed to the function
 	ko := desired.ko.DeepCopy()
 
-	if resp.ClusterSubnetGroup.ClusterSubnetGroupName != nil {
-		ko.Spec.Name = resp.ClusterSubnetGroup.ClusterSubnetGroupName
-	} else {
-		ko.Spec.Name = nil
-	}
 	if resp.ClusterSubnetGroup.Description != nil {
 		ko.Spec.Description = resp.ClusterSubnetGroup.Description
 	} else {
