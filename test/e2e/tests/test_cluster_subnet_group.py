@@ -17,15 +17,19 @@ import time
 import pytest
 import logging
 
+from acktest import tags
 from acktest.k8s import condition
 from acktest.k8s import resource as k8s
 from acktest.resources import random_suffix_name
 from e2e import service_marker, CRD_GROUP, CRD_VERSION, load_redshift_resource
+from e2e.bootstrap_resources import get_bootstrap_resources
 from e2e.replacement_values import REPLACEMENT_VALUES
 
 RESOURCE_PLURAL = "clustersubnetgroups"
 
 DELETE_WAIT_AFTER_SECONDS = 10
+DELETE_WAIT_PERIODS = 3
+DELETE_PERIOD_LENGTH = 10
 
 # Creating a resource with tags requires a secondary sync, which the
 # controller requeues after 30 seconds.
@@ -39,20 +43,39 @@ def redshift_client():
     return boto3.client("redshift")
 
 
-@pytest.fixture(scope="module")
-def ec2_client():
-    import boto3
-    return boto3.client("ec2")
+@pytest.fixture
+def cluster_subnet_group():
+    subnet_ids = get_bootstrap_resources().ClusterSubnetGroupVPC.public_subnets.subnet_ids
+    assert len(subnet_ids) > 1, "At least two bootstrapped subnets are needed for testing"
+    resource_name = random_suffix_name("ack-test-csg", 24)
+    description = "ACK test cluster subnet group"
 
+    replacements = REPLACEMENT_VALUES.copy()
+    replacements["CLUSTER_SUBNET_GROUP_NAME"] = resource_name
+    replacements["DESCRIPTION"] = description
+    replacements["SUBNET_ID_1"] = subnet_ids[0]
 
-def get_subnet_ids(ec2_client):
-    """Get two subnet IDs from the default VPC for testing."""
-    resp = ec2_client.describe_subnets(
-        Filters=[{"Name": "default-for-az", "Values": ["true"]}],
+    resource_data = load_redshift_resource(
+        "cluster_subnet_group",
+        additional_replacements=replacements,
     )
-    subnets = resp.get("Subnets", [])
-    assert len(subnets) > 1, "At least two default subnets are needed for testing"
-    return subnets[0]["SubnetId"], subnets[1]["SubnetId"]
+    logging.info(f"Creating ClusterSubnetGroup {resource_name}")
+
+    ref = k8s.CustomResourceReference(
+        CRD_GROUP, CRD_VERSION, RESOURCE_PLURAL,
+        resource_name, namespace="default",
+    )
+    k8s.create_custom_resource(ref, resource_data)
+    cr = k8s.wait_resource_consumed_by_controller(ref)
+
+    yield ref, cr, resource_name, description, subnet_ids
+
+    # Clean up in case the test failed before its own delete step.
+    if k8s.get_resource_exists(ref):
+        _, deleted = k8s.delete_custom_resource(
+            ref, DELETE_WAIT_PERIODS, DELETE_PERIOD_LENGTH,
+        )
+        assert deleted
 
 
 def patch_and_wait_for_sync(ref, updates):
@@ -82,36 +105,12 @@ def describe_subnet_group(redshift_client, name):
     return groups[0]
 
 
-def aws_tags(group):
-    return {t["Key"]: t["Value"] for t in group.get("Tags", [])}
-
-
 @service_marker
 @pytest.mark.canary
 class TestClusterSubnetGroup:
-    def test_create_update_delete(self, redshift_client, ec2_client):
-        subnet_id, second_subnet_id = get_subnet_ids(ec2_client)
-        resource_name = random_suffix_name("ack-test-csg", 24)
-        description = "ACK test cluster subnet group"
-
-        replacements = REPLACEMENT_VALUES.copy()
-        replacements["CLUSTER_SUBNET_GROUP_NAME"] = resource_name
-        replacements["DESCRIPTION"] = description
-        replacements["SUBNET_ID_1"] = subnet_id
-
-        resource_data = load_redshift_resource(
-            "cluster_subnet_group",
-            additional_replacements=replacements,
-        )
-        logging.info(f"Creating ClusterSubnetGroup {resource_name}")
-
-        # Create the resource
-        ref = k8s.CustomResourceReference(
-            CRD_GROUP, CRD_VERSION, RESOURCE_PLURAL,
-            resource_name, namespace="default",
-        )
-        k8s.create_custom_resource(ref, resource_data)
-        cr = k8s.wait_resource_consumed_by_controller(ref)
+    def test_create_update_delete(self, redshift_client, cluster_subnet_group):
+        ref, cr, resource_name, description, subnet_ids = cluster_subnet_group
+        subnet_id, second_subnet_id = subnet_ids[0], subnet_ids[1]
 
         assert cr is not None
         assert k8s.get_resource_exists(ref)
@@ -137,7 +136,10 @@ class TestClusterSubnetGroup:
         assert len(cr["status"]["subnets"]) > 0
 
         # Verify tags in AWS
-        assert aws_tags(group).get("environment") == "test"
+        tags.assert_equal_without_ack_tags(
+            expected=[{"Key": "environment", "Value": "test"}],
+            actual=group.get("Tags", []),
+        )
 
         # --- Update: change description ---
         new_description = "Updated ACK test cluster subnet group"
@@ -156,9 +158,14 @@ class TestClusterSubnetGroup:
             },
         })
 
-        tags = aws_tags(describe_subnet_group(redshift_client, resource_name))
-        assert tags.get("environment") == "staging"
-        assert tags.get("team") == "platform"
+        group = describe_subnet_group(redshift_client, resource_name)
+        tags.assert_equal_without_ack_tags(
+            expected=[
+                {"Key": "environment", "Value": "staging"},
+                {"Key": "team", "Value": "platform"},
+            ],
+            actual=group.get("Tags", []),
+        )
 
         # --- Update: remove a tag ---
         patch_and_wait_for_sync(ref, {
@@ -169,9 +176,11 @@ class TestClusterSubnetGroup:
             },
         })
 
-        tags = aws_tags(describe_subnet_group(redshift_client, resource_name))
-        assert "environment" not in tags
-        assert tags.get("team") == "platform"
+        group = describe_subnet_group(redshift_client, resource_name)
+        tags.assert_equal_without_ack_tags(
+            expected=[{"Key": "team", "Value": "platform"}],
+            actual=group.get("Tags", []),
+        )
 
         # --- Update: add a subnet ---
         patch_and_wait_for_sync(ref, {
