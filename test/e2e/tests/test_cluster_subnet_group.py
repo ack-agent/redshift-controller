@@ -135,6 +135,14 @@ class TestClusterSubnetGroup:
         assert cr["status"].get("subnets") is not None
         assert len(cr["status"]["subnets"]) > 0
 
+        # Verify the ARN is populated in status and recognized by Redshift
+        arn = cr["status"]["ackResourceMetadata"].get("arn")
+        assert arn is not None
+        assert arn.startswith("arn:")
+        assert ":redshift:" in arn
+        assert arn.endswith(f":subnetgroup:{resource_name.lower()}")
+        redshift_client.describe_tags(ResourceName=arn)
+
         # Verify tags in AWS
         tags.assert_equal_without_ack_tags(
             expected=[{"Key": "environment", "Value": "test"}],

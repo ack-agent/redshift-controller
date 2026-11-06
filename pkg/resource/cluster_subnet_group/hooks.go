@@ -16,11 +16,22 @@ package cluster_subnet_group
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	ackrtlog "github.com/aws-controllers-k8s/runtime/pkg/runtime/log"
 	svcsdk "github.com/aws/aws-sdk-go-v2/service/redshift"
 	svcsdktypes "github.com/aws/aws-sdk-go-v2/service/redshift/types"
 )
+
+// subnetGroupARN returns the ARN of the cluster subnet group with the
+// given name. The Redshift DescribeClusterSubnetGroups API does not return
+// an ARN, so it is constructed from the resource manager's partition, region
+// and account. Redshift stores subnet group names in lowercase, so the name
+// is lowercased to match the ARN the service uses.
+func (rm *resourceManager) subnetGroupARN(name string) string {
+	return fmt.Sprintf("arn:%s:redshift:%s:%s:subnetgroup:%s",
+		rm.awsPartition, rm.awsRegion, rm.awsAccountID, strings.ToLower(name))
+}
 
 // syncTags reconciles the Tags field for a ClusterSubnetGroup resource
 // by computing the diff between desired and latest tags, then calling
@@ -39,28 +50,12 @@ func (rm *resourceManager) syncTags(
 		exit(err)
 	}()
 
-	// The Redshift DescribeClusterSubnetGroups API does not return an ARN,
-	// so ACKResourceMetadata.ARN is never populated by the generated code.
-	// We construct the ARN from the resource metadata (account, region,
-	// partition) and the subnet group name.
-	var arn string
-	if desired.ko.Status.ACKResourceMetadata != nil && desired.ko.Status.ACKResourceMetadata.ARN != nil {
-		arn = string(*desired.ko.Status.ACKResourceMetadata.ARN)
-	} else {
-		// Build the ARN: arn:{partition}:redshift:{region}:{account}:subnetgroup:{name}
-		md := desired.ko.Status.ACKResourceMetadata
-		if md == nil {
-			md = latest.ko.Status.ACKResourceMetadata
-		}
-		if md == nil || md.OwnerAccountID == nil || md.Region == nil || md.Partition == nil {
-			return fmt.Errorf("cannot sync tags: resource metadata is not available")
-		}
-		if desired.ko.Spec.Name == nil {
-			return fmt.Errorf("cannot sync tags: resource name is not available")
-		}
-		arn = fmt.Sprintf("arn:%s:redshift:%s:%s:subnetgroup:%s",
-			*md.Partition, *md.Region, *md.OwnerAccountID, *desired.ko.Spec.Name)
+	// The ARN is set on Status.ACKResourceMetadata by sdkFind
+	// (see templates/hooks/cluster_subnet_group/sdk_read_many_post_set_output.go.tpl).
+	if latest.ko.Status.ACKResourceMetadata == nil || latest.ko.Status.ACKResourceMetadata.ARN == nil {
+		return fmt.Errorf("cannot sync tags: resource ARN is not available")
 	}
+	arn := string(*latest.ko.Status.ACKResourceMetadata.ARN)
 
 	desiredTags, _ := convertToOrderedACKTags(desired.ko.Spec.Tags)
 	latestTags, _ := convertToOrderedACKTags(latest.ko.Spec.Tags)
